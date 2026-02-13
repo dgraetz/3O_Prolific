@@ -1,0 +1,729 @@
+---
+title: "comparing younger and older viz similarity"
+output: 
+  html_document:
+    code_folding: hide
+    toc: true         # optional: adds a table of contents
+    toc_float: true
+    toc_depth: 6
+    number_sections: true
+date: "2026-02-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      cache = TRUE, message = FALSE)
+
+source("functions.R")
+library(tidyverse)
+library(rio)
+library(lmerTest)
+library(ggpubr)
+library(grid)
+library(jpeg)
+
+scene_levels <- c(paste0("beach", 0:23),
+                  paste0("gazebo", 0:23))
+
+scene_levels_jpg <- paste0(scene_levels, ".jpg")
+```
+
+# Load and prepare data
+
+```{r}
+set.seed(02102026)
+
+young_beach <- readRDS("young_beach_similarity.RDS") %>% 
+  bind_rows() %>%
+  filter(min_AC >= .8) %>%
+  mutate(participant = factor(participant),
+         is_old = 0)
+
+young_gazebo <- readRDS("young_gazebo_similarity.RDS") %>% 
+  bind_rows() %>%
+  filter(min_AC >= .8)%>%
+  mutate(participant = factor(participant),
+         is_old = 0)
+
+
+old_beach <- readRDS("old_beach_similarity.RDS") %>% 
+  bind_rows() %>%
+  filter(min_AC >= .8)%>%
+  mutate(participant = factor(participant),
+         is_old = 1)
+
+
+old_gazebo <- readRDS("old_gazebo_similarity.RDS") %>% 
+  bind_rows() %>%
+  filter(min_AC >= .8)%>%
+  mutate(participant = factor(participant),
+         is_old = 1)
+
+
+
+bind_rows(young_beach, young_gazebo, old_beach, old_gazebo) %>%
+  group_by(participant, is_old, img1_cat) %>%
+  summarize(N = n()) %>% 
+  group_by(is_old, img1_cat) %>%
+  summarize(Avg_trials_per_person = mean(N),
+            N_unique_subs = length(unique(participant))) %>%
+  make_apa_table()
+```
+
+
+# Correlating Y-Y, O-O, Y-O
+
+Here we're testing if within-age group correlations are higher than between age-groups.
+
+For that, I am drawing 40 subjects from the sample, and split them in two groups of 20 each. Within each group I am randomly selecting 7500 trials, build the matrix, again ignoring subjects (so not estimating a similiarity matrix within person and then across, I am simply ignoring the subject factor). Then, I am calculating the correlation when comparing young group 1 with young group 2, old group 1 with old group 2, and young group 1 and old group 1 (which of the young groups is compared with which of the old groups shouldn't matter since it's random). This is done separately for beaches and gazebos, each is repeated 1,000 times. 
+
+Even though the number of trials per subject group and stimulus are not widely different, it's best I think to control for number of subjects involved and keep the number of trials constant to avoid differences between age groups being driven by different reliabilities due to differing numbers of trials/more between-subject variability.
+
+```{r}
+
+#set up the grid
+df <- expand.grid(iteration = 1:1000,
+                  N_subjects = 40,
+                  sample_size = 7500, 
+                  scene = c("beaches", "gazebos")) %>%
+  mutate(r_younger_younger = NA, #placeholder columns
+         r_younger_older = NA,
+         r_older_older = NA)
+
+#aggregate data
+create_sim_mat <- function(x){
+  
+  x %>%
+    group_by(img1, img2) %>%
+    summarize(similarity = mean(similarity, na.rm  = TRUE))
+  
+}
+
+
+for(i in 1:nrow(df)){
+  
+  #get the accurate type of stimulus matrix 
+  if (df$scene[i] == "beaches"){
+    
+    ratings <- list(old = old_beach,
+                    young = young_beach)
+  } else {
+    
+    ratings <- list(old = old_gazebo,
+                    young = young_gazebo)
+  }
+  
+  
+  #let's make sure our data is coming from the same number of subjects to avoid biases (older adults respond slower, therefore fewer trials, also older adult sample is smaller, therefore greater reliability with set number of trials)
+  
+  young_subjects <- unique(ratings$young$participant)
+  young_subjects <- sample(young_subjects, df$N_subjects[i], replace = FALSE)
+  old_subjects <- unique(ratings$old$participant)
+  old_subjects <- sample(old_subjects, df$N_subjects[i], replace = FALSE)
+
+  ratings$young1 <- ratings$young %>% filter(participant %in% head(young_subjects, df$N_subjects[i]/2))
+  ratings$young2 <- ratings$young %>% filter(participant %in% tail(young_subjects, df$N_subjects[i]/2))
+  ratings$old1 <- ratings$old %>% filter(participant %in% head(old_subjects, df$N_subjects[i]/2))
+  ratings$old2 <- ratings$old %>% filter(participant %in% tail(old_subjects, df$N_subjects[i]/2))
+  
+  young1_rows <- 1:nrow(ratings$young1)
+  young2_rows <- 1:nrow(ratings$young2)
+  old1_rows <- 1:nrow(ratings$old1)
+  old2_rows <- 1:nrow(ratings$old2)
+  
+  #uncomment this if you want to control for number of trials per subject
+  young1_rows <- sample(1:nrow(ratings$young1), size = df$sample_size[i], replace = FALSE)
+  young2_rows <- sample(1:nrow(ratings$young2), size = df$sample_size[i], replace = FALSE)
+  old1_rows <- sample(1:nrow(ratings$old1), size = df$sample_size[i], replace = FALSE)
+  old2_rows <- sample(1:nrow(ratings$old2), size = df$sample_size[i], replace = FALSE)
+  
+  
+  young1 <- ratings$young1[young1_rows,] %>% create_sim_mat() %>% rename(young1 = similarity)
+  young2 <- ratings$young2[young2_rows,] %>% create_sim_mat()  %>% rename(young2 = similarity)
+  old1 <- ratings$old1[old1_rows,] %>% create_sim_mat() %>% rename(old1 = similarity)
+  old2 <- ratings$old2[old2_rows,] %>% create_sim_mat() %>% rename(old2 = similarity)
+  
+  all <- young1 %>%
+    full_join(young2, by = c("img1", "img2")) %>%
+    full_join(old1, by = c("img1", "img2")) %>%
+    full_join(old2, by = c("img1", "img2"))
+  
+  
+  df$r_younger_younger[i] <- cor(all$young1, all$young2, use = "pairwise.complete.obs")
+  df$r_older_older[i] <- cor(all$old1, all$old2, use = "pairwise.complete.obs")
+  
+  df$r_younger_older[i] <- cor(all$young1, all$old1, use = "pairwise.complete.obs")
+  
+  
+}
+
+# to make plotting easier, I am making it long format
+df_long <- df %>%
+  pivot_longer(cols = c(r_younger_younger, r_older_older, r_younger_older), names_to = "type", values_to = "cor", names_prefix = "r_") 
+
+df_long_agg <- df_long %>%
+  group_by(type, scene) %>%
+  summarize(cor = mean(cor))
+
+ggplot(df_long, aes(x = type, y = cor, color = scene, fill = scene))+
+  geom_jitter(alpha = 0.2)+
+  geom_point(data = df_long_agg, pch = 23, color = "black", size = 3)+
+  scale_x_discrete(limits = c("younger_younger", "older_older", "younger_older"))+
+  #labs(x = "correlation type")+
+  theme_classic()
+
+
+
+ggsave("results/correlation_differences.png", width = 7, height = 3, units = "in")
+```
+
+
+# Differences between younger and older...
+
+First, I am plotting the difference matrix between younger and older
+
+```{r}
+#df_controlled_subjects <- df
+#Let's see where the differences are:
+older_agg <- read.csv("results/3O_similarity08_2026-02-10 212218.76203.csv") %>%
+  rename(older_sim = similarity)
+
+younger_agg <- rio::import("/Users/dominik/Google Drive/My Drive/Studium/University of Oregon/SAP/3O/results/3O_similarity08_2025-03-03 154159.343498.csv") %>%
+  rename(younger_sim = similarity)
+
+
+all_sim_agg <- full_join(older_agg, younger_agg) %>%
+  mutate(diff = older_sim-younger_sim,
+         img1 = factor(img1, levels = scene_levels_jpg),
+         img2 = factor(img2, levels = scene_levels_jpg))
+
+plt_diffmat <- ggplot(all_sim_agg, aes(x = img1, y = img2, fill = diff))+
+  geom_tile()+
+  scale_fill_gradient2(low = "red", mid = "white", high = "blue", midpoint = 0)+
+  scale_x_discrete(breaks = scene_levels_jpg[seq(1,length(scene_levels_jpg), 4)])+
+  scale_y_discrete(breaks = scene_levels_jpg[seq(1,length(scene_levels_jpg), 4)])+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+plt_diffmat %>% plotly::ggplotly()
+
+
+all_sim_agg <- all_sim_agg %>%
+  mutate(img1_path = paste0("beaches_prolific/stimuli/", img1),
+         img2_path = paste0("beaches_prolific/stimuli/", img2))
+```
+
+Now, I am picking the most extreme values in difference to take a look at what older and younger do differently:
+
+```{r}
+# CLEANING STEPS:
+# 1. Fix Symmetry: Filter so we only keep one version of each pair (A-B, not B-A)
+# 2. Identify Scene: Guess scene type from filename (assuming 'beach' or 'gazebo' is in the name)
+# 3. Create Paths: specific to the scene folder
+all_unique <- all_sim_agg %>%
+  filter(as.character(img1) < as.character(img2)) %>%                 # Removes duplicates and self-pairs
+  mutate(
+    scene_type = case_when(
+      str_detect(img1, "beach") ~ "beaches",
+      str_detect(img1, "gazebo") ~ "gazebos",
+      TRUE ~ "unknown"
+    ),
+  )
+
+# --- 2. PLOTTING FUNCTION ---
+
+get_comparison_plots <- function(data){
+  out <- list()
+  
+  for(i in 1:nrow(data)){
+    
+    # Image 1
+    img1_grob <- tryCatch({
+      rasterGrob(readJPEG(data$img1_path[i]), interpolate=TRUE)
+    }, error = function(e) { grid::textGrob("Img Missing") })
+    
+    p1 <- ggplot() + annotation_custom(img1_grob) + theme_void()
+    
+    # Stats Text
+    # Red = Older rated higher; Blue = Younger rated higher
+    text_col <- ifelse(data$diff[i] > 0, "darkred", "navyblue")
+    stats_text <- paste0(
+      "Y: ", sprintf("%.2f", data$younger_sim[i]), "\n",
+      "O: ", sprintf("%.2f", data$older_sim[i]), "\n",
+      "Diff: ", sprintf("%+.2f", data$diff[i])
+    )
+    
+    p2 <- ggplot() +
+      geom_text(aes(x = 0.5, y = 0.5, label = stats_text), 
+                size = 3, color = text_col, fontface = "bold") +
+      theme_void()
+    
+    # Image 2
+    img2_grob <- tryCatch({
+      rasterGrob(readJPEG(data$img2_path[i]), interpolate=TRUE)
+    }, error = function(e) { grid::textGrob("Img Missing") })
+    
+    p3 <- ggplot() + annotation_custom(img2_grob) + theme_void()
+    
+    # Stack: Image - Stats - Image
+    out[[i]] <- ggarrange(p1, p2, p3, ncol = 1, heights = c(1, 0.4, 1))
+  }
+  return(out)
+}
+
+# --- 3. GENERATE PLOTS FOR BEACHES ---
+
+beaches_extreme <- all_unique %>%
+  filter(scene_type == "beaches") %>%
+  arrange(diff) %>%
+  slice(1:5, (n()-4):n()) # Top 5 negative (Younger) and Top 5 positive (Older)
+
+if(nrow(beaches_extreme) > 0){
+  beach_plots <- get_comparison_plots(beaches_extreme)
+  final_beach <- ggarrange(plotlist = beach_plots, nrow = 1, ncol = 10)
+  
+  ggsave("results/beach_extremes.png", final_beach, width = 16, height = 4, bg = "white")
+  print("Beach plot saved.")
+} else {
+  print("No beach data found.")
+}
+
+final_beach
+
+# --- 4. GENERATE PLOTS FOR GAZEBOS ---
+
+gazebos_extreme <- all_unique %>%
+  filter(scene_type == "gazebos") %>%
+  arrange(diff) %>%
+  slice(1:5, (n()-4):n()) 
+
+if(nrow(gazebos_extreme) > 0){
+  gazebo_plots <- get_comparison_plots(gazebos_extreme)
+  final_gazebo <- ggarrange(plotlist = gazebo_plots, nrow = 1, ncol = 10)
+  
+  ggsave("results/gazebo_extremes.png", final_gazebo, width = 16, height = 4, bg = "white")
+  print("Gazebo plot saved.")
+} else {
+  print("No gazebo data found.")
+}
+
+
+final_gazebo
+```
+
+Now, I want to figure out if the relationship between the visual similarity and the principal components change. This will give some insight into whether the meaning of visual similarity values obtained from older adults changed - if it didn't then there might be an intercept difference between age groups, but no difference in slopes. However, if the meaning changed, the slope will be significantly different. 
+
+```{r}
+sim <- readRDS("../brain_analysis/helper_files/sim.RDS") 
+
+sim <- sim %>%
+  mutate(cat1 = gsub("[[:digit:]]+", "", scene1),
+         cat2 = gsub("[[:digit:]]+", "", scene2)) %>%
+  filter(cat1 == cat2) %>%
+  group_by(cat1) %>%
+  mutate(across(
+    .cols = c(clip, sem, vgg_mp1, vgg_mp3, vgg_mp5, gist, ssim, alex),             # Select columns (or use where(is.numeric))
+    .fns = ~ .x - mean(.x, na.rm = TRUE), # Subtract mean (handling NAs)
+    .names = "{.col}_centered"         # Naming pattern for NEW variables
+  ))
+
+
+
+trials <- bind_rows(young_beach, young_gazebo, old_beach, old_gazebo) %>%
+  mutate(scene1 = gsub(".jpg", "", img1),
+         scene2 = gsub(".jpg", "", img2)) %>%
+  left_join(sim)
+
+
+
+#here we are defining the matrix that we always want to show
+#Basically, this will help us later, when working with full matrices, to select only the pairs that correspond to the lower triangle
+
+df <- expand.grid(scene1 = scene_levels,
+                  scene2 = scene_levels) %>%
+  mutate(present_before = 0)
+
+for(i in 1:nrow(df)){
+  
+  idx <- which(df$scene2 == df$scene1[i] & df$scene1 == df$scene2[i])
+  if (idx > i){
+    df$present_before[idx] <- 1
+  }
+  
+}
+
+#full pairs
+unique_pairs <- df %>%
+  filter(present_before == 0) %>%
+  mutate(cat1 = gsub("[[:digit:]]+", "", scene1),
+         cat2 = gsub("[[:digit:]]+", "", scene2),
+         scene1 = factor(scene1, levels = scene_levels),
+         scene2 = factor(scene2, levels = scene_levels))
+
+#within category pairs
+unique_pairs_same_cat <- unique_pairs %>%
+  filter(cat1 == cat2)
+
+rm(df)
+
+
+lower_tr <- function(unique_pairs, df){
+  left_join(unique_pairs, df) %>%
+    mutate(scene1 = factor(scene1, levels = scene_levels),
+           scene2 = factor(scene2, levels = scene_levels)) %>%
+    return()
+}
+
+
+
+all_sim_agg_lower_tri <- all_sim_agg %>%
+  mutate(scene1 = gsub(".jpg", "", img1),
+         scene2 = gsub(".jpg", "", img2)) %>%
+  left_join(sim) %>% 
+  lower_tr(unique_pairs_same_cat, .)
+
+all_sim_agg_lower_tri_long <- all_sim_agg_lower_tri %>%
+  pivot_longer(cols = c(older_sim, younger_sim), values_to = "vizsim", names_to = "is_old") %>%
+  mutate(is_old = case_when(is_old == "older_sim" ~ 1,
+                            is_old == "younger_sim" ~ 0 ))
+
+
+
+
+model_pc1 <- lm(pc1 ~ is_old * vizsim * cat1, all_sim_agg_lower_tri_long) 
+
+model_pc1 %>% 
+  make_model_table()
+
+#This indeed does the same as geom_smooth, so I'll comment this out
+# emm <- emmeans::emmeans(model_pc1, ~ is_old * vizsim * cat1, 
+#                         type = "response", 
+#                         at = list(is_old = c(0, 1),
+#                                   cat1 = c("beach", "gazebo"),
+#                                   vizsim = range(all_sim_agg_lower_tri_long$vizsim, na.rm = TRUE))) %>%
+#   as.data.frame()
+# 
+# emm
+
+ggplot(all_sim_agg_lower_tri_long, aes(x = vizsim, y = pc1, color = factor(is_old)))+
+  geom_point(alpha = 0.5)+
+  geom_smooth(method = "lm")+
+  labs(x = "Visual similarity")+
+  facet_wrap(~cat1)+
+  theme_classic()
+
+model_pc2 <- lm(pc2 ~ is_old * vizsim * cat2, all_sim_agg_lower_tri_long) 
+
+model_pc2 %>% 
+  make_model_table()
+
+
+ggplot(all_sim_agg_lower_tri_long, aes(x = vizsim, y = pc2, color = factor(is_old)))+
+  geom_point(alpha = 0.5)+
+  geom_smooth(method = "lm")+
+  labs(x = "Visual similarity")+
+  facet_wrap(~cat1)+
+  theme_classic()
+
+
+```
+
+This is a table with the correlations between visual similarity and PC1 and PC2, by category and age group.
+
+```{r}
+
+correlations <- expand_grid(is_old = c(0, 1),
+            correlate_with = c("PC1", "PC2"),
+            cat1 = c("beach", "gazebo")) %>%
+  rowwise() %>%
+  mutate(cor = case_when(correlate_with == "PC1" ~ cor(all_sim_agg_lower_tri_long$pc1[all_sim_agg_lower_tri_long$is_old == is_old & all_sim_agg_lower_tri_long$cat1 == cat1], 
+                                                       all_sim_agg_lower_tri_long$vizsim[all_sim_agg_lower_tri_long$is_old == is_old & all_sim_agg_lower_tri_long$cat1 == cat1], 
+                                                       use = "pairwise.complete.obs"),
+                         
+                         correlate_with == "PC2" ~ cor(all_sim_agg_lower_tri_long$pc2[all_sim_agg_lower_tri_long$is_old == is_old & all_sim_agg_lower_tri_long$cat1 == cat1], 
+                                                       all_sim_agg_lower_tri_long$vizsim[all_sim_agg_lower_tri_long$is_old == is_old & all_sim_agg_lower_tri_long$cat1 == cat1], 
+                                                       use = "pairwise.complete.obs")))
+
+make_apa_table(correlations)
+
+
+
+```
+
+Now, instead of analyzing PC1 and PC2 separately, I use one score column and include a PC1/PC2 predictor, to test if the age difference are different between PC1 and PC2. Here it looks like there are no age differences, which is kind of strange? Looking at the plot I would think there should be a vizsim:is_old:cat1gazebo interaction.
+
+
+```{r}
+all_sim_agg_lower_tri_longer <- all_sim_agg_lower_tri_long %>%
+  pivot_longer(cols = c(pc1, pc2), values_to = "pc_value", names_to = "pc_type")
+
+
+
+lm(pc_value ~ pc_type * vizsim * is_old * cat1, all_sim_agg_lower_tri_longer) %>% make_model_table()
+
+```
+
+
+# Re-create the PCA
+ 
+This is just demonstrating that the PCA is doing the same as Souroush's PCA :)
+
+```{r}
+
+# PC1 Loadings from Extended Data Table 1
+pc1_paper <- c(
+  vgg_mp1 = 0.427,
+  vgg_mp3 = 0.442,
+  vgg_mp5 = 0.332,
+  memv    = 0.240,
+  per     = 0.191,
+  clip     = 0.236,  # NLP in the paper
+  gist    = -0.127,
+  ssim    = 0.399,
+  sem    = -0.081,
+  alex    = 0.426
+)
+
+pc1_paper <- pc1_paper %>% 
+  as.data.frame() %>%
+  rownames_to_column("var") %>%
+  rename("pc1_paper" = ".")
+
+# PC2 Loadings from Extended Data Table 1
+pc2_paper <- c(
+  vgg_mp1 = -0.106,
+  vgg_mp3 = -0.146,
+  vgg_mp5 = 0.113,
+  memv    = 0.438,
+  per     = 0.515,
+  clip     = 0.272,  # NLP in the paper
+  gist    = 0.325,
+  ssim    = -0.293,
+  sem    = 0.482,
+  alex    = 0.005
+)
+
+pc2_paper <- pc2_paper %>% 
+  as.data.frame() %>%
+  rownames_to_column("var") %>%
+  rename("pc2_paper" = ".")
+
+
+#Let's run our pca
+
+pca_df <- all_sim_agg_lower_tri %>%
+  select(vgg_mp1:alex) %>%
+  filter(!is.na(vgg_mp1)) 
+  
+  
+pca <- prcomp(pca_df, center = TRUE, scale. = TRUE)
+
+
+pca$rotation[,1:2] %>%
+  as.data.frame() %>% 
+  rownames_to_column("var") %>% 
+  left_join(pc1_paper) %>%
+  left_join(pc2_paper)
+
+
+```
+
+
+This should establish that our PCA are the same :)
+
+```{r}
+
+
+my_pca_younger_df <- all_sim_agg_lower_tri %>%
+  select(vgg_mp1:alex, younger_sim, -per) %>%
+  filter(!is.na(vgg_mp1)) %>%
+  mutate(younger_sim = log(younger_sim)) %>%
+  rename(per_young = younger_sim)
+  
+  
+my_younger_pca <- prcomp(my_pca_younger_df, center = TRUE, scale. = TRUE)
+
+
+
+var_df_young <- data.frame(
+  PC = 1:length(my_younger_pca$sdev),
+  variance = my_younger_pca$sdev^2) %>%
+  mutate(prop_var = variance / sum(variance),
+         cumulative = cumsum(prop_var)) %>%
+  mutate(is_old = factor(0))
+
+
+ggplot(var_df_young, aes(x = factor(PC), y = variance)) +
+  geom_bar(stat = "identity", color = "black") +
+  labs(
+    title = "Screeplot",
+    x = "Principal Component",
+    y = "variance"
+  ) +
+  theme_classic()
+
+ggplot(var_df_young, aes(x = factor(PC), y = cumulative)) +
+  geom_bar(stat = "identity", color = "black") +
+  labs(
+    title = "variance explained",
+    x = "Principal Component",
+    y = "Percentage of Variance"
+  ) +
+  theme_classic()
+
+
+my_younger_pc <- my_younger_pca$rotation[,1:2] %>%
+  as.data.frame() %>% 
+  rownames_to_column("var") %>% 
+  left_join(pc1_paper %>% mutate(var = ifelse(var == "per", "per_young", var))) %>%
+  left_join(pc2_paper %>% mutate(var = ifelse(var == "per", "per_young", var)))
+
+
+my_younger_pc_long <- my_younger_pc %>%
+  rename(
+    own_PC1   = PC1,
+    own_PC2   = PC2,
+    paper_PC1 = pc1_paper,
+    paper_PC2 = pc2_paper
+  ) %>%
+  # 2. Pivot to long format
+  pivot_longer(
+    cols = -var,               # pivot everything except the 'var' column
+    names_to = c("source", "pc"), 
+    names_sep = "_",           # split the new column names at the underscore
+    values_to = "loading"
+  )
+
+ggplot(my_younger_pc_long, aes(x = var, y = abs(loading), group = source, fill = source))+
+  geom_bar(stat = "identity", position = "dodge", color = "black", width = 0.7)+
+  facet_wrap(~pc)+
+  labs(title = "Soroush's and my loadings are the same :)")+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+
+
+Let's run the PCA with older adults data:
+
+```{r}
+
+
+my_pca_older_df <- all_sim_agg_lower_tri %>%
+  select(vgg_mp1:alex, older_sim, -per) %>%
+  filter(!is.na(vgg_mp1)) %>%
+  mutate(older_sim = log(older_sim)) %>%
+  rename(per_old = older_sim)
+  
+  
+my_older_pca <- prcomp(my_pca_older_df, center = TRUE, scale. = TRUE)
+
+
+
+var_df_old <- data.frame(
+  PC = 1:length(my_older_pca$sdev),
+  variance = my_older_pca$sdev^2) %>%
+  mutate(prop_var = variance / sum(variance),
+         cumulative = cumsum(prop_var)) %>%
+  mutate(is_old = factor(1))
+
+
+var_df <- bind_rows(var_df_old, var_df_young)
+
+ggplot(var_df, aes(x = factor(PC), y = variance, group = is_old, fill = is_old)) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.7, color = "black") +
+  labs(
+    title = "Screeplot",
+    x = "Principal Component",
+    y = "variance"
+  ) +
+  theme_classic()
+
+ggplot(var_df, aes(x = factor(PC), y = cumulative, group = is_old, fill = is_old)) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.7, color = "black") +
+  labs(
+    title = "variance explained",
+    x = "Principal Component",
+    y = "Percentage of Variance"
+  ) +
+  theme_classic()
+
+
+my_older_pc <- my_older_pca$rotation[,1:2] %>%
+  as.data.frame() %>% 
+  rownames_to_column("var") %>% 
+  left_join(pc1_paper %>% mutate(var = ifelse(var == "per", "per_old", var))) %>%
+  left_join(pc2_paper %>% mutate(var = ifelse(var == "per", "per_old", var)))
+
+
+my_older_pc_long <- my_older_pc %>%
+  rename(
+    own_PC1   = PC1,
+    own_PC2   = PC2,
+    paper_PC1 = pc1_paper,
+    paper_PC2 = pc2_paper
+  ) %>%
+  # 2. Pivot to long format
+  pivot_longer(
+    cols = -var,               # pivot everything except the 'var' column
+    names_to = c("source", "pc"), 
+    names_sep = "_",           # split the new column names at the underscore
+    values_to = "loading"
+  )
+ 
+ggplot(my_older_pc_long, aes(x = var, y = abs(loading), group = source, fill = source))+
+  geom_bar(stat = "identity", position = "dodge", color = "black", width = 0.7)+
+  scale_fill_discrete(name = "is_old", 
+                      labels = c("paper" = "0",
+                                 "own" = "1"))+
+  scale_x_discrete(labels = c("per_old" = "per"))+
+  facet_wrap(~pc)+
+  labs(title = "Slight loading differences between young and old")+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+
+
+# Let's compare the PCs from young and old
+
+
+```{r}
+younger_pcs <- my_younger_pca$x %>% 
+  as.data.frame()
+
+colnames(younger_pcs) <- paste0("younger_", colnames(younger_pcs))
+
+older_pcs <- my_older_pca$x %>% 
+  as.data.frame()
+
+colnames(older_pcs) <- paste0("older_", colnames(older_pcs))
+
+
+all_pcs <- cbind(younger_pcs, older_pcs)
+
+sim_offdiag <- all_sim_agg_lower_tri %>%
+  filter(!is.na(vgg_mp1))
+
+all_pcs <- cbind(sim_offdiag, all_pcs)
+
+ggplot(all_pcs, aes(x = younger_PC1, y = older_PC2, color = cat1))+
+  geom_abline(intercept = 0, slope = 1)+
+  geom_point()+
+  coord_fixed(xlim = c(-5, 5),
+              ylim = c(-5, 5))+
+  theme_classic()
+
+```
+
+
+
+
+
+
+
