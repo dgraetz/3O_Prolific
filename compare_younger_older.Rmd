@@ -702,7 +702,7 @@ colnames(younger_pcs) <- paste0("younger_", colnames(younger_pcs))
 older_pcs <- my_older_pca$x %>% 
   as.data.frame()
 
-colnames(older_pcs) <- paste0("older_", colnames(older_pcs))
+colnames(older_pcs) <- paste0("older_", colnames(older_pcs)) 
 
 
 all_pcs <- cbind(younger_pcs, older_pcs)
@@ -712,11 +712,21 @@ sim_offdiag <- all_sim_agg_lower_tri %>%
 
 all_pcs <- cbind(sim_offdiag, all_pcs)
 
-ggplot(all_pcs, aes(x = younger_PC1, y = older_PC2, color = cat1))+
+ggplot(all_pcs, aes(x = younger_PC1, y = older_PC1, color = cat1))+
   geom_abline(intercept = 0, slope = 1)+
-  geom_point()+
+  geom_point(alpha = 0.3)+
   coord_fixed(xlim = c(-5, 5),
               ylim = c(-5, 5))+
+  labs(title = "PC1 score, comparing old and young")+
+  theme_classic()
+
+
+ggplot(all_pcs, aes(x = younger_PC2, y = older_PC2, color = cat1))+
+  geom_abline(intercept = 0, slope = 1)+
+  geom_point(alpha = 0.3)+
+  coord_fixed(xlim = c(-5, 5),
+              ylim = c(-5, 5))+
+  labs(title = "PC2 score, comparing old and young")+
   theme_classic()
 
 ```
