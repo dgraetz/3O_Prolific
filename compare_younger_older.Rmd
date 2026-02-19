@@ -175,6 +175,38 @@ ggplot(df_long, aes(x = type, y = cor, color = scene, fill = scene))+
 
 
 ggsave("results/correlation_differences.png", width = 7, height = 3, units = "in")
+
+# Soroush
+
+df_long_agg_collapsed <- df_long_agg %>%
+  group_by(type) %>%
+  summarize(cor = mean(cor))
+
+ggplot(df_long_agg_collapsed, aes(x = type, y = cor))+
+  geom_point(pch = 23, size = 3, fill = "black")+
+  scale_x_discrete(labels = c("younger_younger" = "r(younger, younger)", 
+                              "older_older" = "r(older, older)", 
+                              "younger_older" = "r(younger, older)"),
+                     limits = c("younger_younger", "older_older", "younger_older"))+
+  scale_y_continuous(limits = c(0.65, 0.9))+
+  labs(x = "correlation type",
+       y = "Correlation")+
+  theme_classic(base_size = 14)
+
+ggsave("results/Soroush_correlation_differences.svg", width = 5, height = 3, units = "in")
+
+ggplot(df_long_agg_collapsed, aes(x = type, y = cor))+
+  geom_bar(pch = 23, size = 3, fill = "black", stat = "identity", width = 0.5)+
+  scale_x_discrete(labels = c("younger_younger" = "r(younger, younger)", 
+                              "older_older" = "r(older, older)", 
+                              "younger_older" = "r(younger, older)"),
+                     limits = c("younger_younger", "older_older", "younger_older"))+
+  labs(x = "correlation type",
+       y = "Correlation")+
+  theme_classic(base_size = 14)
+
+ggsave("results/Soroush_correlation_differences.svg", width = 5, height = 3, units = "in")
+
 ```
 
 
@@ -450,6 +482,27 @@ make_apa_table(correlations)
 
 
 ```
+
+Ignoring category...
+
+```{r}
+
+
+correlations_ignore_cat <- expand_grid(is_old = c(0, 1),
+            correlate_with = c("PC1", "PC2")) %>%
+  rowwise() %>%
+  mutate(cor = case_when(correlate_with == "PC1" ~ cor(all_sim_agg_lower_tri_long$pc1[all_sim_agg_lower_tri_long$is_old == is_old], 
+                                                       all_sim_agg_lower_tri_long$vizsim[all_sim_agg_lower_tri_long$is_old == is_old], 
+                                                       use = "pairwise.complete.obs"),
+                         
+                         correlate_with == "PC2" ~ cor(all_sim_agg_lower_tri_long$pc2[all_sim_agg_lower_tri_long$is_old == is_old], 
+                                                       all_sim_agg_lower_tri_long$vizsim[all_sim_agg_lower_tri_long$is_old == is_old], 
+                                                       use = "pairwise.complete.obs")))
+
+make_apa_table(correlations_ignore_cat)
+
+```
+
 
 Now, instead of analyzing PC1 and PC2 separately, I use one score column and include a PC1/PC2 predictor, to test if the age difference are different between PC1 and PC2. Here it looks like there are no age differences, which is kind of strange? Looking at the plot I would think there should be a vizsim:is_old:cat1gazebo interaction.
 
